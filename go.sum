@@ -8,5 +8,7 @@ github.com/theplant/testingutils v0.0.2 h1:ryFb7J8NPnyMA4mdgBEf5ha3QUqWA9WVulWGy
 github.com/theplant/testingutils v0.0.2/go.mod h1:nh7wj3YTJehg0PBHnPXtvqIqdnBUn0Gqb79JHnblFuc=
 github.com/zhangshanwen/html2go v0.0.0-20250317102556-9624c52cbb04 h1:UoNCoUsE7iVaNaD1ny1RiNq4CXJ488mSPcW3XOtTJGU=
 github.com/zhangshanwen/html2go v0.0.0-20250317102556-9624c52cbb04/go.mod h1:ji2tIBhvMV8raibBmg7v/Zhwdw7r2WxqEmVEDmCnsS4=
+github.com/zhangshanwen/html2go v0.0.0-20250319105037-813e15ef2d3d h1:MkaZoWHiSsfDHOt2eCd6IA0np0KXHnRU2SubC08ZwCI=
+github.com/zhangshanwen/html2go v0.0.0-20250319105037-813e15ef2d3d/go.mod h1:ji2tIBhvMV8raibBmg7v/Zhwdw7r2WxqEmVEDmCnsS4=
 golang.org/x/net v0.35.0 h1:T5GQRQb2y08kTAByq9L4/bz8cipCdA8FbRTXewonqY8=
 golang.org/x/net v0.35.0/go.mod h1:EglIi67kWsHKlRzzVMUD93VMSWGFOMSZgxFjparz1Qk=
