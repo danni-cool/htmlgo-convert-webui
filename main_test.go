@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sunfmin/html2go/parse"
+	"github.com/zhangshanwen/html2go/parse"
 )
 
 // 测试HTML到Go的转换
@@ -80,7 +80,6 @@ func TestHTMLToGoConversion(t *testing.T) {
 			reqBody := ConvertRequest{
 				HTML:          tc.html,
 				PackagePrefix: tc.packagePrefix,
-				RemovePackage: tc.removePackage,
 				Direction:     "html2go",
 			}
 			reqJSON, err := json.Marshal(reqBody)
@@ -337,7 +336,10 @@ func TestSimpleBidirectionalConversion(t *testing.T) {
 	}
 
 	// Go到HTML（使用HTML到Go生成的代码）
-	html2, err := convertGoToHTML(goCode)
+	completeGoCode := fmt.Sprintf(`// 用户提供的代码
+var n = %s
+`, goCode)
+	html2, err := convertGoToHTML(completeGoCode)
 	if err != nil {
 		t.Errorf("Go到HTML转换失败: %v", err)
 	} else if strings.Contains(html2, "编译或执行错误") {
@@ -370,7 +372,10 @@ func TestHTMLToGoToHTMLWithDifferentPrefix(t *testing.T) {
 	}
 
 	// Go到HTML（使用HTML到Go生成的代码）
-	html2, err := convertGoToHTML(goCode)
+	completeGoCode := fmt.Sprintf(`// 用户提供的代码
+var n = %s
+`, goCode)
+	html2, err := convertGoToHTML(completeGoCode)
 	if err != nil {
 		t.Errorf("Go到HTML转换失败: %v", err)
 	} else if strings.Contains(html2, "编译或执行错误") {
@@ -384,5 +389,344 @@ func TestHTMLToGoToHTMLWithDifferentPrefix(t *testing.T) {
 			!strings.Contains(html2, "标题") || !strings.Contains(html2, "内容") {
 			t.Errorf("转换后的HTML不包含原始HTML的关键部分\n原始HTML: %s\n转换后HTML: %s", html, html2)
 		}
+	}
+}
+
+// 测试HTML转Go后，再从Go转回HTML，确保上一次的输出成为下一次的输入
+func TestBidirectionalConversionWithOutputAsInput(t *testing.T) {
+	// 创建一个测试服务器
+	ts := httptest.NewServer(http.HandlerFunc(handleConvert))
+	defer ts.Close()
+
+	// 初始HTML
+	initialHTML := `<div class="container"><h1>测试标题</h1><p>这是一个<strong>测试</strong>内容</p></div>`
+	packagePrefix := "h"
+
+	fmt.Println("===== 测试模式切换时的输入/输出自动复制 =====")
+	fmt.Println("1. 初始状态：用户在HTML->GO模式下")
+	fmt.Printf("   输入HTML: %s\n\n", initialHTML)
+
+	// 第一步：HTML->GO模式下，将HTML转换为GO代码
+	html2goReq := ConvertRequest{
+		HTML:          initialHTML,
+		PackagePrefix: packagePrefix,
+		Direction:     "html2go",
+	}
+
+	html2goReqBody, _ := json.Marshal(html2goReq)
+	html2goResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(html2goReqBody))
+	if err != nil {
+		t.Fatalf("HTML转Go请求失败: %v", err)
+	}
+	defer html2goResp.Body.Close()
+
+	var html2goResult ConvertResponse
+	if err := json.NewDecoder(html2goResp.Body).Decode(&html2goResult); err != nil {
+		t.Fatalf("解析HTML转Go响应失败: %v", err)
+	}
+
+	// 获取生成的GO代码
+	goCode := html2goResult.Code
+	if goCode == "" {
+		t.Fatalf("HTML转Go失败，未生成Go代码")
+	}
+	fmt.Println("   点击'转换'按钮后生成的Go代码:")
+	fmt.Printf("   %s\n\n", goCode)
+
+	// 第二步：用户切换到GO->HTML模式，此时上一次生成的GO代码应该自动成为输入
+	fmt.Println("2. 用户切换到GO->HTML模式")
+	fmt.Println("   上一次生成的Go代码自动成为输入")
+
+	completeGoCode := fmt.Sprintf(`// 用户提供的代码
+var n = %s
+`, goCode)
+
+	fmt.Println("   用户点击'转换'按钮")
+	go2htmlReq := ConvertRequest{
+		GoCode:    completeGoCode,
+		Direction: "go2html",
+	}
+
+	go2htmlReqBody, _ := json.Marshal(go2htmlReq)
+	go2htmlResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(go2htmlReqBody))
+	if err != nil {
+		t.Fatalf("Go转HTML请求失败: %v", err)
+	}
+	defer go2htmlResp.Body.Close()
+
+	var go2htmlResult ConvertResponse
+	if err := json.NewDecoder(go2htmlResp.Body).Decode(&go2htmlResult); err != nil {
+		t.Fatalf("解析Go转HTML响应失败: %v", err)
+	}
+
+	// 获取生成的HTML
+	htmlResult := go2htmlResult.HTML
+	if htmlResult == "" {
+		t.Fatalf("Go转HTML失败，未生成HTML")
+	}
+	fmt.Println("   生成的HTML:")
+	fmt.Printf("   %s\n\n", htmlResult)
+
+	// 第三步：用户再次切换回HTML->GO模式，此时上一次生成的HTML应该自动成为输入
+	fmt.Println("3. 用户切换回HTML->GO模式")
+	fmt.Println("   上一次生成的HTML自动成为输入")
+
+	fmt.Println("   用户点击'转换'按钮")
+	html2goAgainReq := ConvertRequest{
+		HTML:          htmlResult,
+		PackagePrefix: packagePrefix,
+		Direction:     "html2go",
+	}
+
+	html2goAgainReqBody, _ := json.Marshal(html2goAgainReq)
+	html2goAgainResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(html2goAgainReqBody))
+	if err != nil {
+		t.Fatalf("第二次HTML转Go请求失败: %v", err)
+	}
+	defer html2goAgainResp.Body.Close()
+
+	var html2goAgainResult ConvertResponse
+	if err := json.NewDecoder(html2goAgainResp.Body).Decode(&html2goAgainResult); err != nil {
+		t.Fatalf("解析第二次HTML转Go响应失败: %v", err)
+	}
+
+	// 获取第二次生成的GO代码
+	goCodeAgain := html2goAgainResult.Code
+	if goCodeAgain == "" {
+		t.Fatalf("第二次HTML转Go失败，未生成Go代码")
+	}
+	fmt.Println("   生成的Go代码:")
+	fmt.Printf("   %s\n\n", goCodeAgain)
+
+	// 验证两次生成的Go代码是否基本一致（可能有格式差异）
+	// 这里我们检查关键元素是否存在
+	if !strings.Contains(goCodeAgain, "Div(") ||
+		!strings.Contains(goCodeAgain, "H1(") ||
+		!strings.Contains(goCodeAgain, "P(") ||
+		!strings.Contains(goCodeAgain, "Strong(") {
+		t.Errorf("两次生成的Go代码不一致\n第一次: %s\n第二次: %s", goCode, goCodeAgain)
+	}
+
+	// 第四步：用户再次切换到GO->HTML模式，此时上一次生成的GO代码应该自动成为输入
+	fmt.Println("4. 用户再次切换到GO->HTML模式")
+	fmt.Println("   上一次生成的Go代码自动成为输入")
+
+	completeGoCodeAgain := fmt.Sprintf(`// 用户提供的代码
+var n = %s
+`, goCodeAgain)
+
+	fmt.Println("   用户点击'转换'按钮")
+	go2htmlAgainReq := ConvertRequest{
+		GoCode:    completeGoCodeAgain,
+		Direction: "go2html",
+	}
+
+	go2htmlAgainReqBody, _ := json.Marshal(go2htmlAgainReq)
+	go2htmlAgainResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(go2htmlAgainReqBody))
+	if err != nil {
+		t.Fatalf("第二次Go转HTML请求失败: %v", err)
+	}
+	defer go2htmlAgainResp.Body.Close()
+
+	var go2htmlAgainResult ConvertResponse
+	if err := json.NewDecoder(go2htmlAgainResp.Body).Decode(&go2htmlAgainResult); err != nil {
+		t.Fatalf("解析第二次Go转HTML响应失败: %v", err)
+	}
+
+	// 获取第二次生成的HTML
+	htmlResultAgain := go2htmlAgainResult.HTML
+	if htmlResultAgain == "" {
+		t.Fatalf("第二次Go转HTML失败，未生成HTML")
+	}
+	fmt.Println("   生成的HTML:")
+	fmt.Printf("   %s\n\n", htmlResultAgain)
+
+	// 验证两次生成的HTML是否包含相同的关键元素
+	if !strings.Contains(htmlResultAgain, "div") ||
+		!strings.Contains(htmlResultAgain, "container") ||
+		!strings.Contains(htmlResultAgain, "h1") ||
+		!strings.Contains(htmlResultAgain, "p") ||
+		!strings.Contains(htmlResultAgain, "strong") {
+		t.Errorf("两次生成的HTML不一致\n第一次: %s\n第二次: %s", htmlResult, htmlResultAgain)
+	}
+
+	fmt.Println("===== 测试完成 =====")
+}
+
+// 测试模拟前端界面的使用场景，上一次的输出自动成为下一次的输入
+func TestWebUIConversionFlow(t *testing.T) {
+	// 创建一个测试服务器
+	ts := httptest.NewServer(http.HandlerFunc(handleConvert))
+	defer ts.Close()
+
+	// 模拟用户在Web界面上的操作流程
+	// 1. 初始状态：用户在HTML->GO模式下，输入HTML
+	initialHTML := `<div class="container">
+  <h1>简单测试</h1>
+  <p>这是一个简单的测试。</p>
+</div>`
+
+	// 用户选择的包前缀
+	packagePrefix := "h"
+
+	// 2. 用户点击"转换"按钮，将HTML转换为GO代码
+	html2goReq := ConvertRequest{
+		HTML:          initialHTML,
+		PackagePrefix: packagePrefix,
+		Direction:     "html2go",
+	}
+
+	html2goReqBody, _ := json.Marshal(html2goReq)
+	html2goResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(html2goReqBody))
+	if err != nil {
+		t.Fatalf("HTML转Go请求失败: %v", err)
+	}
+	defer html2goResp.Body.Close()
+
+	var html2goResult ConvertResponse
+	if err := json.NewDecoder(html2goResp.Body).Decode(&html2goResult); err != nil {
+		t.Fatalf("解析HTML转Go响应失败: %v", err)
+	}
+
+	// 获取生成的GO代码
+	goCode := html2goResult.Code
+	if goCode == "" {
+		t.Fatalf("HTML转Go失败，未生成Go代码")
+	}
+	fmt.Printf("HTML->GO模式下生成的Go代码:\n%s\n\n", goCode)
+
+	// 3. 用户切换到GO->HTML模式，此时上一次生成的GO代码应该自动成为输入
+	// 模拟用户对GO代码进行一些修改
+	modifiedGoCode := goCode
+	if strings.Contains(goCode, "P(") {
+		// 在P元素后添加一个新的段落
+		modifiedGoCode = strings.Replace(
+			goCode,
+			"),",
+			"),\n\t\th.P(h.Text(\"这是用户添加的新段落\")).Class(\"additional\"),",
+			1,
+		)
+	}
+	fmt.Printf("用户修改后的Go代码:\n%s\n\n", modifiedGoCode)
+
+	// 4. 用户在GO->HTML模式下点击"转换"按钮
+	completeGoCode := fmt.Sprintf(`// 用户提供的代码
+var n = %s
+`, modifiedGoCode)
+
+	go2htmlReq := ConvertRequest{
+		GoCode:    completeGoCode,
+		Direction: "go2html",
+	}
+
+	go2htmlReqBody, _ := json.Marshal(go2htmlReq)
+	go2htmlResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(go2htmlReqBody))
+	if err != nil {
+		t.Fatalf("Go转HTML请求失败: %v", err)
+	}
+	defer go2htmlResp.Body.Close()
+
+	var go2htmlResult ConvertResponse
+	if err := json.NewDecoder(go2htmlResp.Body).Decode(&go2htmlResult); err != nil {
+		t.Fatalf("解析Go转HTML响应失败: %v", err)
+	}
+
+	// 获取生成的HTML
+	htmlResult := go2htmlResult.HTML
+	if htmlResult == "" {
+		t.Fatalf("Go转HTML失败，未生成HTML")
+	}
+	fmt.Printf("GO->HTML模式下生成的HTML:\n%s\n\n", htmlResult)
+
+	// 验证HTML中是否包含用户添加的新段落
+	if !strings.Contains(htmlResult, "这是用户添加的新段落") {
+		t.Errorf("生成的HTML中没有包含用户添加的内容")
+	}
+
+	// 5. 用户再次切换回HTML->GO模式，此时上一次生成的HTML应该自动成为输入
+	// 模拟用户对HTML进行一些修改
+	modifiedHTML := htmlResult
+	if strings.Contains(htmlResult, "</p>") {
+		// 在p结束标签后添加一个新的div
+		modifiedHTML = strings.Replace(
+			htmlResult,
+			"</p>",
+			"</p>\n<div class=\"footer-note\">页面底部注释</div>",
+			1,
+		)
+	}
+	fmt.Printf("用户修改后的HTML:\n%s\n\n", modifiedHTML)
+
+	// 6. 用户在HTML->GO模式下点击"转换"按钮
+	html2goAgainReq := ConvertRequest{
+		HTML:          modifiedHTML,
+		PackagePrefix: packagePrefix,
+		Direction:     "html2go",
+	}
+
+	html2goAgainReqBody, _ := json.Marshal(html2goAgainReq)
+	html2goAgainResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(html2goAgainReqBody))
+	if err != nil {
+		t.Fatalf("第二次HTML转Go请求失败: %v", err)
+	}
+	defer html2goAgainResp.Body.Close()
+
+	var html2goAgainResult ConvertResponse
+	if err := json.NewDecoder(html2goAgainResp.Body).Decode(&html2goAgainResult); err != nil {
+		t.Fatalf("解析第二次HTML转Go响应失败: %v", err)
+	}
+
+	// 获取第二次生成的GO代码
+	finalGoCode := html2goAgainResult.Code
+	if finalGoCode == "" {
+		t.Fatalf("第二次HTML转Go失败，未生成Go代码")
+	}
+	fmt.Printf("第二次HTML->GO模式下生成的Go代码:\n%s\n\n", finalGoCode)
+
+	// 验证最终Go代码中是否包含用户添加的所有内容
+	if !strings.Contains(finalGoCode, "additional") || !strings.Contains(finalGoCode, "这是用户添加的新段落") {
+		t.Errorf("最终Go代码中没有包含第一次用户添加的内容")
+	}
+
+	if !strings.Contains(finalGoCode, "footer-note") || !strings.Contains(finalGoCode, "页面底部注释") {
+		t.Errorf("最终Go代码中没有包含第二次用户添加的内容")
+	}
+
+	// 7. 用户再次切换到GO->HTML模式，此时上一次生成的GO代码应该自动成为输入
+	completeGoCodeAgain := fmt.Sprintf(`// 用户提供的代码
+var n = %s
+`, finalGoCode)
+
+	go2htmlAgainReq := ConvertRequest{
+		GoCode:    completeGoCodeAgain,
+		Direction: "go2html",
+	}
+
+	go2htmlAgainReqBody, _ := json.Marshal(go2htmlAgainReq)
+	go2htmlAgainResp, err := http.Post(ts.URL, "application/json", bytes.NewBuffer(go2htmlAgainReqBody))
+	if err != nil {
+		t.Fatalf("第二次Go转HTML请求失败: %v", err)
+	}
+	defer go2htmlAgainResp.Body.Close()
+
+	var go2htmlAgainResult ConvertResponse
+	if err := json.NewDecoder(go2htmlAgainResp.Body).Decode(&go2htmlAgainResult); err != nil {
+		t.Fatalf("解析第二次Go转HTML响应失败: %v", err)
+	}
+
+	// 获取第二次生成的HTML
+	finalHTML := go2htmlAgainResult.HTML
+	if finalHTML == "" {
+		t.Fatalf("第二次Go转HTML失败，未生成HTML")
+	}
+	fmt.Printf("第二次GO->HTML模式下生成的HTML:\n%s\n\n", finalHTML)
+
+	// 验证最终HTML中是否包含所有用户添加的内容
+	if !strings.Contains(finalHTML, "这是用户添加的新段落") || !strings.Contains(finalHTML, "additional") {
+		t.Errorf("最终HTML中没有包含第一次用户添加的内容")
+	}
+
+	if !strings.Contains(finalHTML, "页面底部注释") || !strings.Contains(finalHTML, "footer-note") {
+		t.Errorf("最终HTML中没有包含第二次用户添加的内容")
 	}
 }

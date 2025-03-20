@@ -29,34 +29,14 @@
         <p class="text-gray-600">在HTML和Go代码之间实时双向转换</p>
       </header>
 
-      <!-- 转换方向选择 -->
-      <div class="flex justify-center mb-8">
-        <div class="inline-flex rounded-md shadow-sm" role="group">
-          <button
-            id="html2goBtn"
-            type="button"
-            class="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-blue-600 rounded-l-lg hover:bg-blue-700 focus:z-10 focus:ring-2 focus:ring-blue-500 focus:bg-blue-700"
-          >
-            HTML → Go
-          </button>
-          <button
-            id="go2htmlBtn"
-            type="button"
-            class="px-4 py-2 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-r-lg hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-2 focus:ring-blue-500 focus:text-blue-700"
-          >
-            Go → HTML
-          </button>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <!-- 左侧编辑器 -->
-        <div class="bg-white rounded-lg shadow-lg p-6">
+      <div class="grid grid-cols-1 lg:grid-cols-5 gap-2">
+        <!-- 左侧编辑器 (HTML) -->
+        <div class="bg-white rounded-lg shadow-lg p-4 lg:col-span-2">
           <h2
             id="leftEditorTitle"
-            class="text-xl font-semibold text-gray-800 mb-4"
+            class="text-xl font-semibold text-gray-800 mb-2"
           >
-            HTML 输入
+            HTML
           </h2>
           <div
             id="leftEditor"
@@ -64,55 +44,78 @@
           ></div>
         </div>
 
-        <!-- 右侧编辑器 -->
-        <div class="bg-white rounded-lg shadow-lg p-6">
+        <!-- 中间转换按钮 -->
+        <div
+          class="flex flex-col items-center justify-center lg:col-span-1 px-1"
+        >
+          <button
+            id="htmlToGoBtn"
+            class="mb-3 p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition flex items-center justify-center w-10 h-10"
+            title="HTML → Go"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M13 7l5 5m0 0l-5 5m5-5H6"
+              />
+            </svg>
+          </button>
+
+          <button
+            id="goToHtmlBtn"
+            class="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 transition flex items-center justify-center w-10 h-10"
+            title="Go → HTML"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-5 w-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M11 17l-5-5m0 0l5-5m-5 5h12"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <!-- 右侧编辑器 (Go) -->
+        <div class="bg-white rounded-lg shadow-lg p-4 lg:col-span-2">
           <h2
             id="rightEditorTitle"
-            class="text-xl font-semibold text-gray-800 mb-4"
+            class="text-xl font-semibold text-gray-800 mb-2"
           >
-            Go 代码输出
+            Go 代码
           </h2>
           <div
             id="rightEditor"
             class="h-96 border rounded-lg overflow-hidden"
+            contenteditable="true"
           ></div>
         </div>
       </div>
 
-      <!-- 转换选项和按钮 -->
-      <div class="text-center mt-8 space-y-4">
-        <!-- 包前缀配置 -->
-        <div class="flex items-center justify-center space-x-4">
-          <div id="packagePrefixContainer" class="relative">
-            <input
-              type="text"
-              id="packagePrefix"
-              placeholder="包前缀（默认为h）"
-              class="w-48 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-
-          <div id="removePackageContainer" class="flex items-center">
-            <input
-              type="checkbox"
-              id="removePackage"
-              class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-              checked
-            />
-            <label
-              for="removePackage"
-              class="ml-2 text-sm font-medium text-gray-700"
-            >
-              删除package声明
-            </label>
-          </div>
-
-          <button
-            id="convertBtn"
-            class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-8 rounded-lg transition duration-300 transform hover:scale-105"
-          >
-            转换代码
-          </button>
+      <!-- 包前缀配置 -->
+      <div class="text-center mt-8">
+        <div id="packagePrefixContainer" class="relative inline-block">
+          <input
+            type="text"
+            id="packagePrefix"
+            placeholder="包前缀（默认为h）"
+            class="w-48 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
         </div>
       </div>
 
@@ -120,17 +123,15 @@
       <div class="mt-12">
         <h2 class="text-2xl font-semibold text-gray-800 mb-4">示例代码</h2>
         <div
-          id="htmlExamples"
+          id="examples"
           class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
         >
-          <!-- HTML示例 -->
+          <!-- 示例 -->
           <div
             class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-lg transition duration-300"
-            onclick="loadHTMLExample(1)"
+            onclick="loadExample(1)"
           >
-            <h3 class="text-lg font-semibold text-gray-800 mb-2">
-              基本HTML结构
-            </h3>
+            <h3 class="text-lg font-semibold text-gray-800 mb-2">基本结构</h3>
             <p class="text-gray-600 text-sm">
               包含基本的HTML元素和Tailwind CSS类
             </p>
@@ -138,7 +139,7 @@
 
           <div
             class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-lg transition duration-300"
-            onclick="loadHTMLExample(2)"
+            onclick="loadExample(2)"
           >
             <h3 class="text-lg font-semibold text-gray-800 mb-2">表单元素</h3>
             <p class="text-gray-600 text-sm">包含各种表单元素和属性</p>
@@ -146,40 +147,52 @@
 
           <div
             class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-lg transition duration-300"
-            onclick="loadHTMLExample(3)"
+            onclick="loadExample(3)"
           >
             <h3 class="text-lg font-semibold text-gray-800 mb-2">复杂布局</h3>
             <p class="text-gray-600 text-sm">展示更复杂的HTML布局结构</p>
           </div>
-        </div>
 
-        <div
-          id="goExamples"
-          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 hidden"
-        >
-          <!-- Go示例 -->
           <div
             class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-lg transition duration-300"
-            onclick="loadGoExample(1)"
+            onclick="loadExample(4)"
           >
-            <h3 class="text-lg font-semibold text-gray-800 mb-2">基本Go结构</h3>
-            <p class="text-gray-600 text-sm">使用htmlgo包的基本元素</p>
+            <h3 class="text-lg font-semibold text-gray-800 mb-2">
+              VuetifyX Dialog
+            </h3>
+            <p class="text-gray-600 text-sm">VuetifyX对话框组件示例</p>
           </div>
 
           <div
             class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-lg transition duration-300"
-            onclick="loadGoExample(2)"
+            onclick="loadExample(5)"
           >
-            <h3 class="text-lg font-semibold text-gray-800 mb-2">表单示例</h3>
-            <p class="text-gray-600 text-sm">使用htmlgo包创建表单</p>
+            <h3 class="text-lg font-semibold text-gray-800 mb-2">
+              VuetifyX DatePicker
+            </h3>
+            <p class="text-gray-600 text-sm">VuetifyX日期选择器组件示例</p>
           </div>
 
           <div
             class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-lg transition duration-300"
-            onclick="loadGoExample(3)"
+            onclick="loadExample(6)"
           >
-            <h3 class="text-lg font-semibold text-gray-800 mb-2">复杂布局</h3>
-            <p class="text-gray-600 text-sm">使用htmlgo包创建复杂布局</p>
+            <h3 class="text-lg font-semibold text-gray-800 mb-2">
+              VuetifyX TiptapEditor
+            </h3>
+            <p class="text-gray-600 text-sm">VuetifyX富文本编辑器组件示例</p>
+          </div>
+
+          <div
+            class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-lg transition duration-300"
+            onclick="loadExample(7)"
+          >
+            <h3 class="text-lg font-semibold text-gray-800 mb-2">
+              VuetifyX Dialog 高级示例
+            </h3>
+            <p class="text-gray-600 text-sm">
+              包含多步骤表单和自定义操作的对话框示例
+            </p>
           </div>
         </div>
       </div>
@@ -190,7 +203,7 @@
         <p>
           基于
           <a
-            href="https://github.com/sunfmin/html2go"
+            href="https://github.com/zhangshanwen/html2go"
             target="_blank"
             class="text-blue-400 hover:text-blue-300"
             >html2go</a

@@ -2,12 +2,11 @@
 require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' } });
 
 // 编辑器实例
-let leftEditor, rightEditor;
+let htmlEditor, goEditor;
 
-// 转换方向和选项
-let currentDirection = "html2go"; // 默认方向：HTML到Go
+// 转换选项
 let packagePrefix = "h"; // 默认包前缀
-let removePackage = true; // 默认删除package声明
+let isUpdating = false; // 防止无限循环更新的标志
 
 // 定义One Dark Pro主题
 const oneDarkPro = {
@@ -44,8 +43,46 @@ require(['vs/editor/editor.main'], function () {
   // 注册One Dark Pro主题
   monaco.editor.defineTheme('oneDarkPro', oneDarkPro);
 
-  // 创建左侧编辑器（默认为HTML输入）
-  leftEditor = monaco.editor.create(document.getElementById('leftEditor'), {
+  // 安全地禁用HTML和JavaScript语法校验
+  try {
+    if (monaco.languages.html && monaco.languages.html.htmlDefaults &&
+      typeof monaco.languages.html.htmlDefaults.setDiagnosticsOptions === 'function') {
+      monaco.languages.html.htmlDefaults.setDiagnosticsOptions({
+        validate: false
+      });
+    }
+  } catch (e) {
+    console.warn('无法配置HTML语言校验', e);
+  }
+
+  try {
+    if (monaco.languages.typescript && monaco.languages.typescript.javascriptDefaults &&
+      typeof monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions === 'function') {
+      monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+        noSemanticValidation: true,
+        noSyntaxValidation: true
+      });
+    }
+  } catch (e) {
+    console.warn('无法配置JavaScript语言校验', e);
+  }
+
+  // 尝试禁用Go语言的语法校验（如果Monaco支持）
+  try {
+    if (monaco.languages.go && monaco.languages.go.goDefaults &&
+      typeof monaco.languages.go.goDefaults.setDiagnosticsOptions === 'function') {
+      monaco.languages.go.goDefaults.setDiagnosticsOptions({
+        validate: false,
+        noSemanticValidation: true,
+        noSyntaxValidation: true
+      });
+    }
+  } catch (e) {
+    console.warn('无法配置Go语言校验', e);
+  }
+
+  // 创建HTML编辑器
+  htmlEditor = monaco.editor.create(document.getElementById('leftEditor'), {
     value: '<div class="container">\n  <h1 class="text-xl font-bold">Hello World</h1>\n  <p class="text-gray-600">这是一个示例</p>\n</div>',
     language: 'html',
     theme: 'vs-light',
@@ -55,15 +92,58 @@ require(['vs/editor/editor.main'], function () {
     lineHeight: 21,
     padding: { top: 16, bottom: 16 },
     formatOnPaste: true,
-    formatOnType: true
+    formatOnType: true,
+    // 禁用语法校验
+    validate: false
   });
 
-  // 创建右侧编辑器（默认为Go输出）
-  rightEditor = monaco.editor.create(document.getElementById('rightEditor'), {
+  // 创建Go编辑器
+  createGoEditor();
+
+  // 配置编辑器的语法校验
+  configureEditorValidation();
+
+  // 设置编辑器的事件监听器
+  setupEditorListeners();
+
+  // 初始化包前缀输入框
+  const pkgInput = document.getElementById('packagePrefix');
+  if (pkgInput) {
+    pkgInput.value = packagePrefix;
+    pkgInput.addEventListener('change', function () {
+      // 更新包前缀变量，即使是空值
+      packagePrefix = this.value;
+      // 如果当前HTML编辑器有内容，则触发HTML到Go的转换
+      if (htmlEditor.getValue().trim() !== '') {
+        htmlToGoConversion();
+      }
+    });
+  }
+
+  // 清除所有编辑器标记
+  if (htmlEditor && htmlEditor.getModel()) {
+    monaco.editor.setModelMarkers(htmlEditor.getModel(), 'html', []);
+  }
+  if (goEditor && goEditor.getModel()) {
+    monaco.editor.setModelMarkers(goEditor.getModel(), 'go', []);
+  }
+
+  // 初始转换
+  htmlToGoConversion();
+});
+
+// 创建Go编辑器的函数
+function createGoEditor() {
+  // 如果已经存在编辑器，先销毁它
+  if (goEditor) {
+    goEditor.dispose();
+  }
+
+  // 创建新的Go编辑器
+  goEditor = monaco.editor.create(document.getElementById('rightEditor'), {
     value: '// Go代码将在这里显示',
     language: 'go',
     theme: 'oneDarkPro',
-    readOnly: true,
     automaticLayout: true,
     formatOnPaste: true,
     formatOnType: true,
@@ -80,311 +160,76 @@ require(['vs/editor/editor.main'], function () {
     guides: {
       bracketPairs: true,
       indentation: true,
-    }
+    },
+    readOnly: false, // 确保编辑器不是只读的
+    domReadOnly: false, // 确保DOM元素不是只读的
+    // 禁用语法校验
+    validate: false
   });
 
-  // 添加左侧编辑器的更改事件监听器
-  leftEditor.onDidChangeModelContent(debounce(convertCode, 500));
+  console.log("Go编辑器已重新创建");
 
-  // 配置Monaco编辑器的语法校验
-  configureEditorValidation();
-
-  // 初始化包前缀输入框
-  const pkgInput = document.getElementById('packagePrefix');
-  if (pkgInput) {
-    pkgInput.value = packagePrefix;
-    pkgInput.addEventListener('change', function () {
-      packagePrefix = this.value;
-      convertCode();
-    });
-  }
-
-  // 初始化删除package选项
-  const removePackageCheckbox = document.getElementById('removePackage');
-  if (removePackageCheckbox) {
-    removePackageCheckbox.checked = removePackage;
-    removePackageCheckbox.addEventListener('change', function () {
-      removePackage = this.checked;
-      convertCode();
-    });
-  }
-
-  // 初始化转换按钮
-  const convertBtn = document.getElementById('convertBtn');
-  if (convertBtn) {
-    convertBtn.addEventListener('click', convertCode);
-  }
-
-  // 初始化方向切换按钮
-  const html2goBtn = document.getElementById('html2goBtn');
-  const go2htmlBtn = document.getElementById('go2htmlBtn');
-
-  if (html2goBtn && go2htmlBtn) {
-    html2goBtn.addEventListener('click', function () {
-      if (currentDirection !== "html2go") {
-        switchDirection("html2go");
-      }
-    });
-
-    go2htmlBtn.addEventListener('click', function () {
-      if (currentDirection !== "go2html") {
-        switchDirection("go2html");
-      }
-    });
-  }
-
-  // 初始转换
-  convertCode();
-});
+  // 添加点击事件，确保编辑器可以获得焦点
+  document.getElementById('rightEditor').addEventListener('click', function () {
+    if (goEditor) {
+      goEditor.focus();
+      console.log("Go编辑器已获得焦点");
+    }
+  });
+}
 
 // 配置编辑器语法校验
 function configureEditorValidation() {
-  // 由于monaco.languages.html.htmlDefaults.setDiagnosticsOptions不可用，
-  // 我们使用自定义的验证方法
-
-  // 为左侧编辑器添加自定义校验
-  const leftModel = leftEditor.getModel();
-  if (leftModel) {
-    // 根据当前编辑模式设置校验
-    if (currentDirection === "html2go") {
-      // HTML校验
-      monaco.editor.setModelMarkers(leftModel, 'html', []);
-      validateHTML(leftModel);
-    } else {
-      // Go校验
-      monaco.editor.setModelMarkers(leftModel, 'go', []);
-      validateGo(leftModel);
-    }
+  // 禁用所有语法校验
+  const htmlModel = htmlEditor.getModel();
+  if (htmlModel) {
+    monaco.editor.setModelMarkers(htmlModel, 'html', []);
+    // validateHTML(htmlModel); // 已禁用
   }
 
-  // 添加编辑器内容变化监听器，实时更新语法校验
-  leftEditor.onDidChangeModelContent(debounce(function () {
-    const model = leftEditor.getModel();
-    if (model) {
-      if (currentDirection === "html2go") {
-        validateHTML(model);
-      } else {
-        validateGo(model);
-      }
-    }
-  }, 300));
+  // Go校验
+  const goModel = goEditor.getModel();
+  if (goModel) {
+    monaco.editor.setModelMarkers(goModel, 'go', []);
+    // validateGo(goModel); // 已禁用
+  }
+
+  // 禁用编辑器内容变化监听器的语法校验
+  // htmlEditor.onDidChangeModelContent(debounce(function () {
+  //   const model = htmlEditor.getModel();
+  //   if (model) {
+  //     validateHTML(model);
+  //   }
+  // }, 300));
+
+  // goEditor.onDidChangeModelContent(debounce(function () {
+  //   const model = goEditor.getModel();
+  //   if (model) {
+  //     validateGo(model);
+  //   }
+  // }, 300));
 }
 
-// HTML语法校验
+// HTML语法校验 - 已禁用
 function validateHTML(model) {
-  const content = model.getValue();
-  const markers = [];
+  // 函数保留但不执行任何校验
+  return;
 
-  // 检查未闭合的标签
-  const openTags = [];
-  const tagRegex = /<\/?([a-zA-Z][a-zA-Z0-9]*)(?: [^>]*)?(?:\/)?>/g;
-  let match;
-
-  while ((match = tagRegex.exec(content)) !== null) {
-    const fullTag = match[0];
-    const tagName = match[1];
-    const position = model.getPositionAt(match.index);
-
-    // 自闭合标签不需要检查
-    if (fullTag.endsWith('/>')) {
-      continue;
-    }
-
-    // 开始标签
-    if (!fullTag.startsWith('</')) {
-      openTags.push({ name: tagName, position });
-    }
-    // 结束标签
-    else {
-      if (openTags.length === 0) {
-        // 多余的结束标签
-        markers.push({
-          severity: monaco.MarkerSeverity.Error,
-          message: `多余的结束标签 </\${tagName}>`,
-          startLineNumber: position.lineNumber,
-          startColumn: position.column,
-          endLineNumber: position.lineNumber,
-          endColumn: position.column + fullTag.length
-        });
-      } else {
-        const lastOpenTag = openTags.pop();
-        if (lastOpenTag.name !== tagName) {
-          // 标签不匹配
-          markers.push({
-            severity: monaco.MarkerSeverity.Error,
-            message: `标签不匹配: 期望 </\${lastOpenTag.name}>, 但找到 </\${tagName}>`,
-            startLineNumber: position.lineNumber,
-            startColumn: position.column,
-            endLineNumber: position.lineNumber,
-            endColumn: position.column + fullTag.length
-          });
-          // 将上一个标签放回，因为它仍然需要被关闭
-          openTags.push(lastOpenTag);
-        }
-      }
-    }
-  }
-
-  // 检查未闭合的标签
-  for (const tag of openTags) {
-    markers.push({
-      severity: monaco.MarkerSeverity.Error,
-      message: `未闭合的标签 <\${tag.name}>`,
-      startLineNumber: tag.position.lineNumber,
-      startColumn: tag.position.column,
-      endLineNumber: tag.position.lineNumber,
-      endColumn: tag.position.column + tag.name.length + 1
-    });
-  }
-
-  // 设置标记
-  monaco.editor.setModelMarkers(model, 'html', markers);
+  // 以下代码已被禁用
+  // const content = model.getValue();
+  // const markers = [];
+  // ...
 }
 
-// Go语法校验
+// Go语法校验 - 已禁用
 function validateGo(model) {
-  const content = model.getValue();
-  const markers = [];
+  // 函数保留但不执行任何校验
+  return;
 
-  // 检查基本语法错误
-  // 1. 检查括号匹配
-  const brackets = { '(': ')', '{': '}', '[': ']' };
-  const stack = [];
-
-  for (let i = 0; i < content.length; i++) {
-    const char = content[i];
-    const position = model.getPositionAt(i);
-
-    if (Object.keys(brackets).includes(char)) {
-      stack.push({ char, position });
-    } else if (Object.values(brackets).includes(char)) {
-      if (stack.length === 0) {
-        // 多余的右括号
-        markers.push({
-          severity: monaco.MarkerSeverity.Error,
-          message: `多余的右括号 '\${char}'`,
-          startLineNumber: position.lineNumber,
-          startColumn: position.column,
-          endLineNumber: position.lineNumber,
-          endColumn: position.column + 1
-        });
-      } else {
-        const last = stack.pop();
-        if (brackets[last.char] !== char) {
-          // 括号不匹配
-          markers.push({
-            severity: monaco.MarkerSeverity.Error,
-            message: `括号不匹配: 期望 '\${brackets[last.char]}', 但找到 '\${char}'`,
-            startLineNumber: position.lineNumber,
-            startColumn: position.column,
-            endLineNumber: position.lineNumber,
-            endColumn: position.column + 1
-          });
-        }
-      }
-    }
-  }
-
-  // 检查未闭合的括号
-  for (const item of stack) {
-    markers.push({
-      severity: monaco.MarkerSeverity.Error,
-      message: `未闭合的左括号 '\${item.char}'`,
-      startLineNumber: item.position.lineNumber,
-      startColumn: item.position.column,
-      endLineNumber: item.position.lineNumber,
-      endColumn: item.position.column + 1
-    });
-  }
-
-  // 设置标记
-  monaco.editor.setModelMarkers(model, 'go', markers);
-}
-
-// 切换转换方向
-function switchDirection(direction) {
-  // 保存当前内容
-  const currentLeftContent = leftEditor.getValue();
-  const currentRightContent = rightEditor.getValue();
-
-  // 更新当前方向
-  currentDirection = direction;
-
-  // 更新UI
-  if (direction === "html2go") {
-    // 切换到HTML到Go方向
-    document.getElementById('html2goBtn').classList.remove('bg-white', 'text-gray-900');
-    document.getElementById('html2goBtn').classList.add('bg-blue-600', 'text-white');
-    document.getElementById('go2htmlBtn').classList.remove('bg-blue-600', 'text-white');
-    document.getElementById('go2htmlBtn').classList.add('bg-white', 'text-gray-900');
-
-    document.getElementById('leftEditorTitle').textContent = 'HTML 输入';
-    document.getElementById('rightEditorTitle').textContent = 'Go 代码输出';
-
-    document.getElementById('packagePrefixContainer').style.display = 'block';
-    document.getElementById('removePackageContainer').style.display = 'flex';
-
-    document.getElementById('htmlExamples').classList.remove('hidden');
-    document.getElementById('goExamples').classList.add('hidden');
-
-    // 更改编辑器语言
-    monaco.editor.setModelLanguage(leftEditor.getModel(), 'html');
-    monaco.editor.setModelLanguage(rightEditor.getModel(), 'go');
-
-    // 更改编辑器主题
-    leftEditor.updateOptions({ theme: 'vs-light' });
-    rightEditor.updateOptions({ theme: 'oneDarkPro' });
-
-    // 设置编辑器只读状态
-    leftEditor.updateOptions({ readOnly: false });
-    rightEditor.updateOptions({ readOnly: true });
-
-    // 如果之前是Go到HTML方向，则将右侧的HTML转为左侧的HTML输入
-    if (currentRightContent && currentRightContent.trim() !== '<!-- 转换失败 -->' &&
-      !currentRightContent.includes('转换错误')) {
-      leftEditor.setValue(currentRightContent);
-    }
-  } else {
-    // 切换到Go到HTML方向
-    document.getElementById('go2htmlBtn').classList.remove('bg-white', 'text-gray-900');
-    document.getElementById('go2htmlBtn').classList.add('bg-blue-600', 'text-white');
-    document.getElementById('html2goBtn').classList.remove('bg-blue-600', 'text-white');
-    document.getElementById('html2goBtn').classList.add('bg-white', 'text-gray-900');
-
-    document.getElementById('leftEditorTitle').textContent = 'Go 代码输入';
-    document.getElementById('rightEditorTitle').textContent = 'HTML 输出';
-
-    document.getElementById('packagePrefixContainer').style.display = 'none';
-    document.getElementById('removePackageContainer').style.display = 'none';
-
-    document.getElementById('htmlExamples').classList.add('hidden');
-    document.getElementById('goExamples').classList.remove('hidden');
-
-    // 更改编辑器语言
-    monaco.editor.setModelLanguage(leftEditor.getModel(), 'go');
-    monaco.editor.setModelLanguage(rightEditor.getModel(), 'html');
-
-    // 更改编辑器主题
-    leftEditor.updateOptions({ theme: 'oneDarkPro' });
-    rightEditor.updateOptions({ theme: 'vs-light' });
-
-    // 设置编辑器只读状态
-    leftEditor.updateOptions({ readOnly: false });
-    rightEditor.updateOptions({ readOnly: true });
-
-    // 如果之前是HTML到Go方向，则将右侧的Go代码转为左侧的Go输入
-    if (currentRightContent && currentRightContent.trim() !== '// Go代码将在这里显示' &&
-      currentRightContent.trim() !== '// 转换失败' &&
-      !currentRightContent.includes('转换错误')) {
-      leftEditor.setValue(currentRightContent);
-    }
-  }
-
-  // 更新语法校验
-  configureEditorValidation();
-
-  // 触发转换
-  convertCode();
+  // 以下代码已被禁用
+  // const content = model.getValue();
+  // const markers = [];
+  // ...
 }
 
 // 防抖函数
@@ -398,50 +243,32 @@ function debounce(func, wait) {
   };
 }
 
-// 代码转换函数
-async function convertCode() {
+// HTML到Go转换函数
+async function htmlToGoConversion() {
+  if (isUpdating) return;
+  isUpdating = true;
+
   try {
-    // 首先进行语法校验
-    const leftModel = leftEditor.getModel();
-    if (leftModel) {
-      // 根据当前方向进行校验
-      if (currentDirection === "html2go") {
-        validateHTML(leftModel);
-      } else {
-        validateGo(leftModel);
-      }
+    // 获取HTML内容
+    const htmlInput = htmlEditor.getValue();
+    console.log("HTML输入内容:", htmlInput);
 
-      // 获取当前的标记
-      const markers = monaco.editor.getModelMarkers({ resource: leftModel.uri });
-
-      // 如果有错误，显示警告但仍然尝试转换
-      if (markers.some(marker => marker.severity === monaco.MarkerSeverity.Error)) {
-        console.warn('编辑器中存在语法错误，转换结果可能不正确');
-      }
+    if (!htmlInput.trim()) {
+      goEditor.setValue('// 请在左侧输入HTML代码');
+      isUpdating = false;
+      return;
     }
 
-    let requestBody = {};
+    // 准备请求体
+    const requestBody = {
+      html: htmlInput,
+      packagePrefix: packagePrefix,
+      direction: "html2go"
+    };
 
-    if (currentDirection === "html2go") {
-      // HTML到Go转换
-      const htmlInput = leftEditor.getValue();
+    console.log("发送转换请求:", JSON.stringify(requestBody));
 
-      requestBody = {
-        html: htmlInput,
-        packagePrefix: packagePrefix,
-        removePackage: removePackage,
-        direction: "html2go"
-      };
-    } else {
-      // Go到HTML转换
-      const goInput = leftEditor.getValue();
-
-      requestBody = {
-        goCode: goInput,
-        direction: "go2html"
-      };
-    }
-
+    // 发送转换请求
     const response = await fetch('/convert', {
       method: 'POST',
       headers: {
@@ -450,18 +277,20 @@ async function convertCode() {
       body: JSON.stringify(requestBody),
     });
 
+    console.log("收到响应状态:", response.status);
+
     if (!response.ok) {
-      // 尝试解析错误响应为JSON
+      // 尝试解析错误响应
       let errorData;
       try {
         errorData = await response.json();
+        console.log("错误响应数据:", errorData);
       } catch (e) {
-        // 如果不是JSON，则获取文本
         const errorText = await response.text();
+        console.log("错误响应文本:", errorText);
         throw new Error(errorText);
       }
 
-      // 如果成功解析为JSON，则使用其中的错误信息
       if (errorData && errorData.error) {
         throw new Error(errorData.error);
       } else {
@@ -470,202 +299,231 @@ async function convertCode() {
     }
 
     const data = await response.json();
+    console.log("转换成功，响应数据:", data);
 
-    // 根据当前方向设置输出
-    if (currentDirection === "html2go") {
-      rightEditor.setValue(data.code || '// 转换失败');
-
-      // 检查转换后的Go代码是否有语法错误
-      if (data.code) {
-        const rightModel = rightEditor.getModel();
-        if (rightModel) {
-          // 清除之前的标记
-          monaco.editor.setModelMarkers(rightModel, 'go', []);
-
-          // 检查生成的Go代码
-          setTimeout(() => {
-            // 使用setTimeout确保编辑器已经更新
-            const goMarkers = [];
-
-            // 检查常见的Go语法错误
-            if (data.code.includes('undefined:')) {
-              const lines = data.code.split('\n');
-              for (let i = 0; i < lines.length; i++) {
-                if (lines[i].includes('undefined:')) {
-                  goMarkers.push({
-                    severity: monaco.MarkerSeverity.Error,
-                    message: `未定义的标识符: ${lines[i]}`,
-                    startLineNumber: i + 1,
-                    startColumn: 1,
-                    endLineNumber: i + 1,
-                    endColumn: lines[i].length + 1
-                  });
-                }
-              }
-            }
-
-            // 设置标记
-            monaco.editor.setModelMarkers(rightModel, 'go', goMarkers);
-          }, 100);
-        }
-      }
-    } else {
-      rightEditor.setValue(data.html || '<!-- 转换失败 -->');
-
-      // 检查转换后的HTML是否有语法错误
-      if (data.html) {
-        const rightModel = rightEditor.getModel();
-        if (rightModel) {
-          // 清除之前的标记
-          monaco.editor.setModelMarkers(rightModel, 'html', []);
-
-          // 检查生成的HTML代码
-          setTimeout(() => {
-            // 使用setTimeout确保编辑器已经更新
-            validateHTML(rightModel);
-          }, 100);
-        }
-      }
-    }
+    // 更新Go编辑器
+    goEditor.setValue(data.code || '// 转换失败');
   } catch (error) {
-    console.error('Error:', error);
-
-    // 显示错误信息
-    if (currentDirection === "html2go") {
-      rightEditor.setValue('// 转换错误: ' + error.message);
-    } else {
-      rightEditor.setValue('<!-- 转换错误: ' + error.message + ' -->');
-    }
-
-    // 在编辑器中标记错误位置（如果可能）
-    const leftModel = leftEditor.getModel();
-    if (leftModel) {
-      const errorMessage = error.message;
-      const markers = [];
-
-      // 尝试从错误消息中提取行号和列号
-      const lineMatch = errorMessage.match(/line (\d+)/i);
-      const colMatch = errorMessage.match(/column (\d+)/i);
-
-      if (lineMatch && lineMatch[1]) {
-        const lineNumber = parseInt(lineMatch[1], 10);
-        const columnNumber = colMatch && colMatch[1] ? parseInt(colMatch[1], 10) : 1;
-        const lineContent = leftModel.getLineContent(lineNumber);
-
-        markers.push({
-          severity: monaco.MarkerSeverity.Error,
-          message: errorMessage,
-          startLineNumber: lineNumber,
-          startColumn: columnNumber,
-          endLineNumber: lineNumber,
-          endColumn: lineContent.length + 1
-        });
-      } else {
-        // 尝试从错误消息中提取标签名或变量名
-        const tagMatch = errorMessage.match(/<([a-zA-Z][a-zA-Z0-9]*)>/);
-        const varMatch = errorMessage.match(/undefined:\s*([a-zA-Z][a-zA-Z0-9]*)/);
-
-        if (tagMatch && tagMatch[1]) {
-          // 搜索HTML中的标签
-          const tagName = tagMatch[1];
-          const content = leftModel.getValue();
-          const tagRegex = new RegExp(`<${tagName}[^>]*>`, 'g');
-          let match;
-
-          while ((match = tagRegex.exec(content)) !== null) {
-            const position = leftModel.getPositionAt(match.index);
-            markers.push({
-              severity: monaco.MarkerSeverity.Error,
-              message: errorMessage,
-              startLineNumber: position.lineNumber,
-              startColumn: position.column,
-              endLineNumber: position.lineNumber,
-              endColumn: position.column + match[0].length
-            });
-          }
-        } else if (varMatch && varMatch[1]) {
-          // 搜索Go代码中的变量
-          const varName = varMatch[1];
-          const content = leftModel.getValue();
-          const varRegex = new RegExp(`\\b${varName}\\b`, 'g');
-          let match;
-
-          while ((match = varRegex.exec(content)) !== null) {
-            const position = leftModel.getPositionAt(match.index);
-            markers.push({
-              severity: monaco.MarkerSeverity.Error,
-              message: errorMessage,
-              startLineNumber: position.lineNumber,
-              startColumn: position.column,
-              endLineNumber: position.lineNumber,
-              endColumn: position.column + varName.length
-            });
-          }
-        }
-
-        // 如果没有找到具体位置，标记整个文档
-        if (markers.length === 0) {
-          markers.push({
-            severity: monaco.MarkerSeverity.Error,
-            message: errorMessage,
-            startLineNumber: 1,
-            startColumn: 1,
-            endLineNumber: leftModel.getLineCount(),
-            endColumn: 1
-          });
-        }
-      }
-
-      // 设置标记
-      monaco.editor.setModelMarkers(leftModel, currentDirection === "html2go" ? 'html' : 'go', markers);
-    }
+    console.error('HTML到Go转换错误:', error);
+    goEditor.setValue(`// 转换错误: ${error.message}`);
+  } finally {
+    isUpdating = false;
   }
 }
 
-// HTML示例代码
-function loadHTMLExample(id) {
-  let exampleHTML = '';
+// Go到HTML的转换
+function goToHtmlConversion() {
+  if (isUpdating) {
+    return;
+  }
+
+  isUpdating = true;
+  console.log("开始Go到HTML转换");
+  const goCode = goEditor.getValue();
+  console.log("获取到Go代码:", goCode);
+
+  if (!goCode || !goCode.trim()) {
+    console.log("Go代码为空，不执行转换");
+    htmlEditor.setValue('');
+    isUpdating = false;
+    return;
+  }
+
+  // 检查Go代码是否包含变量n的定义
+  let processedGoCode = goCode;
+
+  // 检查直接if表达式错误 (最常见的错误模式)
+  if (goCode.match(/var\s+n\s*=\s*if/) || goCode.match(/n\s*:=\s*if/) ||
+    goCode.includes('n = if') || goCode.includes('= if true') ||
+    goCode.includes('= if false')) {
+    // 直接if条件表达式错误
+    htmlEditor.setValue(`<!-- 编译或执行错误: syntax error: unexpected if, expected expression -->
+<!-- 请尝试以下正确写法: -->
+<!--
+    // 方法1: 使用函数
+    var n = htmlgo.Div().Text(func() string {
+        if condition {
+            return "真"
+        }
+        return "假"
+    }())
+    
+    // 方法2: 使用map模拟三元运算符
+    condition := true
+    var n = htmlgo.Div().Text(map[bool]string{true: "真", false: "假"}[condition])
+-->
+`);
+    isUpdating = false;
+    return;
+  }
+
+  // 检查常见语法错误
+  if (goCode.includes('if') &&
+    (goCode.includes('if {') ||
+      goCode.includes('if true {') ||
+      goCode.includes('if false {') ||
+      goCode.match(/var\s+n\s*=\s*if/))) {
+    // 条件语句语法错误
+    htmlEditor.setValue(`<!-- 警告: Go代码中存在条件语句语法错误，请检查您的代码 -->`);
+    isUpdating = false;
+    return;
+  }
+
+  // 检查括号匹配
+  const openBraces = (goCode.match(/\{/g) || []).length;
+  const closeBraces = (goCode.match(/\}/g) || []).length;
+  if (openBraces !== closeBraces) {
+    htmlEditor.setValue(`<!-- 警告: Go代码中的花括号不匹配，开括号: ${openBraces}，闭括号: ${closeBraces} -->`);
+    isUpdating = false;
+    return;
+  }
+
+  const openParens = (goCode.match(/\(/g) || []).length;
+  const closeParens = (goCode.match(/\)/g) || []).length;
+  if (openParens !== closeParens) {
+    htmlEditor.setValue(`<!-- 警告: Go代码中的圆括号不匹配，开括号: ${openParens}，闭括号: ${closeParens} -->`);
+    isUpdating = false;
+    return;
+  }
+
+  if (!goCode.includes('var n =') && !goCode.includes('n :=')) {
+    // 尝试提取主要表达式
+    const lines = goCode.split('\n');
+    let mainExpr = '';
+
+    // 找到第一个非空且非注释的行
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine && !trimmedLine.startsWith('//')) {
+        mainExpr = trimmedLine;
+        break;
+      }
+    }
+
+    if (mainExpr) {
+      // 将主要表达式包装在变量定义中
+      processedGoCode = `var n = ${mainExpr}`;
+      console.log("处理后的Go代码:", processedGoCode);
+    }
+  }
+
+  const requestBody = {
+    goCode: processedGoCode,
+    direction: "go2html"
+  };
+
+  console.log("发送请求:", JSON.stringify(requestBody));
+
+  fetch('/convert', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  })
+    .then(response => {
+      console.log("收到响应状态:", response.status);
+      if (!response.ok) {
+        throw new Error(`HTTP错误! 状态: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log("收到响应数据:", data);
+      if (data.error) {
+        console.error("转换错误:", data.error);
+        htmlEditor.setValue(`<!-- 转换错误: ${data.error} -->`);
+      } else {
+        htmlEditor.setValue(data.html || '');
+      }
+    })
+    .catch(error => {
+      console.error('转换错误:', error);
+      htmlEditor.setValue(`<!-- 转换错误: ${error.message} -->`);
+    })
+    .finally(() => {
+      isUpdating = false;
+      console.log("Go到HTML转换完成");
+    });
+}
+
+// 加载示例代码
+function loadExample(id) {
+  let htmlExample = '';
 
   switch (id) {
     case 1:
-      exampleHTML = `<div class="container mx-auto p-4">
-  <h1 class="text-2xl font-bold mb-4">Hello World</h1>
-  <p class="text-gray-600">这是一个基本的HTML示例</p>
-  <button class="bg-blue-500 text-white px-4 py-2 rounded mt-4">
+      // 基本结构示例
+      htmlExample = `<div class="container mx-auto p-4">
+  <h1 class="text-2xl font-bold text-blue-600">Hello World</h1>
+  <p class="mt-2 text-gray-600">这是一个简单的HTML示例，使用了Tailwind CSS类。</p>
+  <button class="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">
     点击我
   </button>
 </div>`;
       break;
     case 2:
-      exampleHTML = `<form class="max-w-md mx-auto p-6 bg-white rounded-lg shadow-md">
+      // 表单示例
+      htmlExample = `<form class="max-w-md mx-auto p-6 bg-white rounded-lg shadow-md">
+  <h2 class="text-xl font-semibold mb-4">联系表单</h2>
   <div class="mb-4">
-    <label class="block text-gray-700 text-sm font-bold mb-2" for="username">
-      用户名
+    <label class="block text-gray-700 text-sm font-bold mb-2" for="name">
+      姓名
     </label>
-    <input class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" id="username" type="text" placeholder="用户名" required>
+    <input
+      class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+      id="name"
+      type="text"
+      placeholder="请输入您的姓名"
+      required
+    />
+  </div>
+  <div class="mb-4">
+    <label class="block text-gray-700 text-sm font-bold mb-2" for="email">
+      邮箱
+    </label>
+    <input
+      class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+      id="email"
+      type="email"
+      placeholder="请输入您的邮箱"
+      required
+    />
   </div>
   <div class="mb-6">
-    <label class="block text-gray-700 text-sm font-bold mb-2" for="password">
-      密码
+    <label class="block text-gray-700 text-sm font-bold mb-2" for="message">
+      留言
     </label>
-    <input class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline" id="password" type="password" placeholder="******************" required>
+    <textarea
+      class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+      id="message"
+      rows="4"
+      placeholder="请输入您的留言"
+    ></textarea>
   </div>
   <div class="flex items-center justify-between">
-    <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline" type="submit">
-      登录
+    <button
+      class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+      type="submit"
+    >
+      提交
     </button>
-    <a class="inline-block align-baseline font-bold text-sm text-blue-500 hover:text-blue-800" href="#">
-      忘记密码?
-    </a>
+    <button
+      class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+      type="reset"
+    >
+      重置
+    </button>
   </div>
 </form>`;
       break;
     case 3:
-      exampleHTML = `<div class="max-w-6xl mx-auto p-4">
+      // 复杂布局示例
+      htmlExample = `<div class="max-w-6xl mx-auto p-4">
   <header class="bg-white shadow rounded-lg p-4 mb-6">
     <div class="flex justify-between items-center">
       <div class="flex items-center">
-        <img src="https://via.placeholder.com/50" alt="Logo" class="h-10 w-10 mr-3">
+        <img src="https://via.placeholder.com/50" alt="Logo" class="h-10 w-10 mr-3" />
         <h1 class="text-xl font-bold text-gray-800">我的应用</h1>
       </div>
       <nav>
@@ -678,79 +536,160 @@ function loadHTMLExample(id) {
       </nav>
     </div>
   </header>
-  
+
   <main class="grid grid-cols-1 md:grid-cols-3 gap-6">
-    <aside class="md:col-span-1 bg-white p-4 rounded-lg shadow">
-      <h2 class="text-lg font-semibold mb-4">侧边栏</h2>
-      <ul class="space-y-2">
-        <li><a href="#" class="block p-2 bg-gray-100 rounded hover:bg-gray-200">菜单项 1</a></li>
-        <li><a href="#" class="block p-2 rounded hover:bg-gray-200">菜单项 2</a></li>
-        <li><a href="#" class="block p-2 rounded hover:bg-gray-200">菜单项 3</a></li>
-      </ul>
+    <aside class="md:col-span-1">
+      <div class="bg-white shadow rounded-lg p-4">
+        <h2 class="text-lg font-semibold mb-4">侧边栏导航</h2>
+        <ul class="space-y-2">
+          <li class="p-2 bg-blue-50 rounded text-blue-600">仪表盘</li>
+          <li class="p-2 hover:bg-gray-50 rounded">用户管理</li>
+          <li class="p-2 hover:bg-gray-50 rounded">产品列表</li>
+          <li class="p-2 hover:bg-gray-50 rounded">订单管理</li>
+          <li class="p-2 hover:bg-gray-50 rounded">设置</li>
+        </ul>
+      </div>
     </aside>
-    
-    <section class="md:col-span-2 bg-white p-4 rounded-lg shadow">
-      <h2 class="text-xl font-bold mb-4">主要内容</h2>
-      <p class="text-gray-700 mb-4">这是一个复杂布局示例，展示了如何使用HTML和Tailwind CSS创建响应式布局。</p>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-        <div class="bg-gray-100 p-4 rounded">
-          <h3 class="font-semibold mb-2">卡片 1</h3>
-          <p class="text-sm">这是卡片内容的描述文本。</p>
-        </div>
-        <div class="bg-gray-100 p-4 rounded">
-          <h3 class="font-semibold mb-2">卡片 2</h3>
-          <p class="text-sm">这是卡片内容的描述文本。</p>
+
+    <div class="md:col-span-2">
+      <div class="bg-white shadow rounded-lg p-4 mb-6">
+        <h2 class="text-lg font-semibold mb-4">欢迎回来</h2>
+        <p class="text-gray-600">
+          这是一个复杂布局示例，展示了如何使用Tailwind CSS创建响应式布局。
+        </p>
+        <div class="mt-4">
+          <button class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">
+            开始使用
+          </button>
         </div>
       </div>
-      <button class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">了解更多</button>
-    </section>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div class="bg-white shadow rounded-lg p-4">
+          <h3 class="font-semibold text-gray-800">统计数据</h3>
+          <p class="text-3xl font-bold text-blue-600 mt-2">1,234</p>
+          <p class="text-sm text-gray-500">总用户数</p>
+        </div>
+        <div class="bg-white shadow rounded-lg p-4">
+          <h3 class="font-semibold text-gray-800">收入</h3>
+          <p class="text-3xl font-bold text-green-600 mt-2">$5,678</p>
+          <p class="text-sm text-gray-500">本月收入</p>
+        </div>
+      </div>
+    </div>
   </main>
+
+  <footer class="mt-8 bg-white shadow rounded-lg p-4 text-center text-gray-500">
+    <p>© 2023 我的应用. 保留所有权利.</p>
+  </footer>
 </div>`;
       break;
-  }
-
-  // 确保当前是HTML到Go方向
-  if (currentDirection !== "html2go") {
-    switchDirection("html2go");
-  }
-
-  if (leftEditor) {
-    leftEditor.setValue(exampleHTML);
-  }
-}
-
-// Go示例代码
-function loadGoExample(id) {
-  let exampleGo = '';
-
-  switch (id) {
-    case 1:
-      exampleGo = `var n = htmlgo.Div(htmlgo.H1("Hello World").Class("text-2xl font-bold mb-4"), htmlgo.P(htmlgo.Text("这是一个基本的Go示例")).Class("text-gray-600"), htmlgo.Button("点击我").Class("bg-blue-500 text-white px-4 py-2 rounded mt-4")).Class("container mx-auto p-4")`;
+    case 4:
+      // VuetifyX Dialog 基本示例
+      htmlExample = `<div>
+  <vx-dialog
+    title="确认"
+    text="这是一个基本的确认对话框示例"
+    ok-text="确定"
+    cancel-text="取消"
+  >
+    <v-btn color="primary">打开对话框</v-btn>
+  </vx-dialog>
+</div>`;
       break;
-    case 2:
-      exampleGo = `var n = htmlgo.Form(htmlgo.Div(htmlgo.Label("用户名").Class("block text-gray-700 text-sm font-bold mb-2").Attr("for", "username"), htmlgo.Input("username").Type("text").Attr("placeholder", "用户名").Attr("required", "true").Class("shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline")).Class("mb-4"), htmlgo.Div(htmlgo.Label("密码").Class("block text-gray-700 text-sm font-bold mb-2").Attr("for", "password"), htmlgo.Input("password").Type("password").Attr("placeholder", "******************").Attr("required", "true").Class("shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline")).Class("mb-6"), htmlgo.Div(htmlgo.Button("登录").Type("submit").Class("bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"), htmlgo.A(htmlgo.Text("忘记密码?")).Attr("href", "#").Class("inline-block align-baseline font-bold text-sm text-blue-500 hover:text-blue-800")).Class("flex items-center justify-between")).Class("max-w-md mx-auto p-6 bg-white rounded-lg shadow-md")`;
+    case 5:
+      // VuetifyX DatePicker 示例
+      htmlExample = `<div>
+  <vx-date-picker
+    label="日期选择器"
+    clearable
+    tips="示例提示文本"
+  />
+</div>`;
       break;
-    case 3:
-      exampleGo = `var n = htmlgo.Div(htmlgo.Header(htmlgo.Div(htmlgo.Text("导航栏")).Class("flex justify-between items-center")).Class("bg-white shadow rounded-lg p-4 mb-6"), htmlgo.Main(htmlgo.Aside(htmlgo.H2("侧边栏").Class("text-lg font-semibold mb-4")).Class("md:col-span-1 bg-white p-4 rounded-lg shadow"), htmlgo.Section(htmlgo.H2("主要内容").Class("text-xl font-bold mb-4"), htmlgo.P(htmlgo.Text("这是一个复杂布局示例")).Class("text-gray-700 mb-4")).Class("md:col-span-2 bg-white p-4 rounded-lg shadow")).Class("grid grid-cols-1 md:grid-cols-3 gap-6")).Class("max-w-6xl mx-auto p-4")`;
+    case 6:
+      // VuetifyX TiptapEditor 富文本编辑器示例
+      htmlExample = `<div>
+  <vx-tiptap-editor
+    label="富文本编辑器"
+    min-height="200"
+  />
+</div>`;
       break;
+    case 7:
+      // VuetifyX Dialog 高级示例
+      htmlExample = `<div>
+  <vx-dialog
+    title="确认删除"
+    text="您确定要删除这条记录吗？此操作不可撤销。"
+    icon="mdi-delete-alert"
+    icon-color="error"
+    ok-text="删除"
+    ok-color="error"
+    cancel-text="取消"
+  >
+    <v-btn color="error">删除记录</v-btn>
+  </vx-dialog>
+</div>`;
+      break;
+    default:
+      htmlExample = '<div>示例加载失败</div>';
   }
 
-  // 确保当前是Go到HTML方向
-  if (currentDirection !== "go2html") {
-    switchDirection("go2html");
-  }
+  console.log(`加载示例 ${id}`); // 添加日志，帮助调试
 
-  if (leftEditor) {
-    leftEditor.setValue(exampleGo);
+  // 设置HTML编辑器内容
+  if (htmlEditor) {
+    htmlEditor.setValue(htmlExample);
+    // 手动触发HTML到Go转换，增加延迟时间
+    setTimeout(() => {
+      console.log("准备触发HTML到Go转换...");
+      htmlToGoConversion();
+      console.log("已触发HTML到Go转换");
+    }, 500); // 增加延迟时间到500毫秒
+  } else {
+    console.error('HTML编辑器未初始化');
   }
 }
 
 // 添加编辑器内容变化监听器
 function setupEditorListeners() {
-  // 左侧编辑器内容变化时触发代码转换
-  // 注意：语法校验的监听器已经在configureEditorValidation中添加
-  leftEditor.onDidChangeModelContent(debounce(function () {
-    // 触发代码转换
-    convertCode();
-  }, 500));
-} 
+  // 不再自动转换，改为手动按钮触发
+
+  // 添加HTML到Go转换按钮事件
+  const htmlToGoBtn = document.getElementById('htmlToGoBtn');
+  if (htmlToGoBtn) {
+    htmlToGoBtn.addEventListener('click', function () {
+      console.log("点击了HTML到Go转换按钮");
+      htmlToGoConversion();
+    });
+  }
+
+  // 添加Go到HTML转换按钮事件
+  const goToHtmlBtn = document.getElementById('goToHtmlBtn');
+  if (goToHtmlBtn) {
+    goToHtmlBtn.addEventListener('click', function () {
+      console.log("点击了Go到HTML转换按钮");
+      goToHtmlConversion();
+    });
+  }
+
+  // 确保Go编辑器是可编辑的
+  setTimeout(function () {
+    // 强制设置Go编辑器为可编辑状态
+    if (goEditor) {
+      goEditor.updateOptions({ readOnly: false, domReadOnly: false });
+      console.log("已强制设置Go编辑器为可编辑状态");
+
+      // 获取编辑器DOM元素并确保它不是只读的
+      const goEditorElement = document.getElementById('rightEditor');
+      if (goEditorElement) {
+        const editorDomNode = goEditorElement.querySelector('.monaco-editor');
+        if (editorDomNode) {
+          editorDomNode.setAttribute('aria-readonly', 'false');
+          console.log("已设置编辑器DOM元素为非只读");
+        }
+      }
+    }
+  }, 1000);
+}

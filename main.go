@@ -3,14 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/sunfmin/html2go/parse"
+	"github.com/zhangshanwen/html2go/parse"
 )
 
 // 请求结构体
@@ -18,17 +17,17 @@ type ConvertRequest struct {
 	HTML          string `json:"html"`
 	GoCode        string `json:"goCode"`
 	PackagePrefix string `json:"packagePrefix"`
-	RemovePackage bool   `json:"removePackage"`
 	Direction     string `json:"direction"` // "html2go" 或 "go2html"
 }
 
 // 响应结构体
 type ConvertResponse struct {
-	Code string `json:"code"`
-	HTML string `json:"html"`
+	Code  string `json:"code"`
+	HTML  string `json:"html"`
+	Error string `json:"error,omitempty"`
 }
 
-// 删除代码中的package声明
+// 删除代码中的package声明、var n声明和Body()包裹，根据包前缀处理
 func removePackageDeclaration(code string) string {
 	// 查找第一个var声明的位置
 	varIndex := strings.Index(code, "var ")
@@ -37,11 +36,55 @@ func removePackageDeclaration(code string) string {
 	}
 
 	// 截取从var开始的部分
-	return strings.TrimSpace(code[varIndex:])
+	codeWithoutPackage := strings.TrimSpace(code[varIndex:])
+
+	// 移除var n =前缀和最后的可能存在的分号
+	if strings.HasPrefix(codeWithoutPackage, "var n = ") {
+		codeWithoutVar := strings.TrimPrefix(codeWithoutPackage, "var n = ")
+		// 移除末尾可能的分号
+		if strings.HasSuffix(codeWithoutVar, ";") {
+			codeWithoutVar = codeWithoutVar[:len(codeWithoutVar)-1]
+		}
+
+		// 移除Body()包裹
+		if strings.HasPrefix(codeWithoutVar, "Body(") && strings.HasSuffix(codeWithoutVar, ")") {
+			return codeWithoutVar[5 : len(codeWithoutVar)-1]
+		}
+
+		return codeWithoutVar
+	}
+
+	return codeWithoutPackage
 }
 
-// 将Go代码转换为HTML
+// getFriendlyErrorMessage returns a more user-friendly error message
+func getFriendlyErrorMessage(errorMsg string) string {
+	// Common error messages mapped to user-friendly explanations
+	errorMap := map[string]string{
+		"syntax error: unexpected if, expected expression": "错误: 在Go代码中不能直接使用if表达式作为赋值。请使用函数或变量来存储条件结果。",
+		"undefined:":   "错误: 找不到指定的变量或函数。请检查您是否正确导入了所有必要的包，以及变量或函数名是否拼写正确。",
+		"cannot use":   "错误: 类型不匹配。请确保您的变量类型与函数期望的类型一致。",
+		"syntax error": "语法错误: 您的代码包含Go语法错误。请检查括号、逗号、分号等是否正确。",
+	}
+
+	// 检查是否有匹配的友好错误信息
+	for key, value := range errorMap {
+		if strings.Contains(errorMsg, key) {
+			return value + "\n原始错误: " + errorMsg
+		}
+	}
+
+	// 返回原始错误消息的友好包装
+	return "转换过程中出现错误: " + errorMsg
+}
+
+// convertGoToHTML 使用临时文件执行Go代码并生成HTML
 func convertGoToHTML(goCode string) (string, error) {
+	// 检查是否包含非法的直接if表达式
+	if strings.Contains(goCode, "var n = if") || strings.Contains(goCode, "n := if") {
+		return getFriendlyErrorMessage("syntax error: unexpected if, expected expression"), fmt.Errorf("syntax error: unexpected if, expected expression")
+	}
+
 	// 检查并替换包前缀
 	// 如果代码使用了h.作为包前缀，替换为htmlgo.
 	if strings.Contains(goCode, "h.") && !strings.Contains(goCode, "htmlgo.") {
@@ -58,14 +101,15 @@ func convertGoToHTML(goCode string) (string, error) {
 	// 创建临时Go文件
 	tempFile := filepath.Join(tempDir, "main.go")
 
-	// 准备Go代码
-	fullGoCode := `package main
+	// 准备完整的Go代码
+	completeGoCode := `package main
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/theplant/htmlgo"
+	h "github.com/theplant/htmlgo"
 )
 
 func main() {
@@ -79,12 +123,12 @@ func main() {
 		html = strings.ReplaceAll(html, "><", ">\n<")
 		fmt.Println(html)
 	} else {
-		fmt.Println("<!-- 错误: 变量 'n' 未定义或为nil -->")
+		fmt.Println("<!-- 警告: 没有生成HTML输出，请检查您的代码是否正确定义了变量 'n' -->")
 	}
 }
 `
 	// 写入临时文件
-	err = os.WriteFile(tempFile, []byte(fullGoCode), 0o644)
+	err = os.WriteFile(tempFile, []byte(completeGoCode), 0o644)
 	if err != nil {
 		return "", fmt.Errorf("写入临时文件失败: %v", err)
 	}
@@ -107,7 +151,7 @@ func main() {
 				}
 			}
 		}
-		return "<!-- 编译或执行错误: " + strings.ReplaceAll(errorMsg, "--", "-") + " -->", nil
+		return getFriendlyErrorMessage(errorMsg), nil
 	}
 
 	result := string(output)
@@ -116,27 +160,6 @@ func main() {
 	}
 
 	return result, nil
-}
-
-func main() {
-	// 静态文件服务
-	fs := http.FileServer(http.Dir("./static"))
-	http.Handle("/", fs)
-
-	// 转换API
-	http.HandleFunc("/convert", handleConvert)
-
-	// 获取端口号，优先使用环境变量PORT，如果未设置则默认使用8080
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	// 启动服务器
-	log.Printf("服务器启动在 http://localhost:%s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatal("服务器启动失败:", err)
-	}
 }
 
 // 处理HTML到Go的转换请求
@@ -182,17 +205,12 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 
 		html, err := convertGoToHTML(req.GoCode)
 		if err != nil {
-			// 返回详细的错误信息
-			errorResp := map[string]string{
-				"error": "转换失败: " + err.Error(),
-				"type":  "go_error",
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode(errorResp)
-			return
+			// 返回详细的错误信息，但不将状态码设为错误，因为我们已经返回了可用的HTML错误消息
+			resp.HTML = html
+			resp.Error = err.Error()
+		} else {
+			resp.HTML = html
 		}
-		resp.HTML = html
 	} else {
 		// HTML转Go代码（默认方向）
 		if strings.TrimSpace(req.HTML) == "" {
@@ -205,11 +223,10 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 设置默认包前缀
+		// 设置包前缀
 		packagePrefix := req.PackagePrefix
-		if packagePrefix == "" {
-			packagePrefix = "h"
-		}
+		// 注意：这里不再设置默认值，而是保留空字符串
+		// 如果前端传递了空字符串，我们就使用空字符串
 
 		// 使用html2go/parse进行转换
 		htmlReader := strings.NewReader(req.HTML)
@@ -229,7 +246,14 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		goCode := parse.GenerateHTMLGo(packagePrefix, false, htmlReader)
+		// 如果packagePrefix为空，则使用默认值"h"进行转换
+		// 但在输出前会删除所有前缀
+		prefixForConversion := packagePrefix
+		if prefixForConversion == "" {
+			prefixForConversion = "h"
+		}
+
+		goCode := parse.GenerateHTMLGo(prefixForConversion, false, htmlReader)
 
 		// 检查转换结果
 		if goCode == "" {
@@ -243,9 +267,16 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 如果需要，删除package声明
-		if req.RemovePackage {
-			goCode = removePackageDeclaration(goCode)
+		// 始终删除package声明
+		goCode = removePackageDeclaration(goCode)
+
+		// 根据用户输入的包前缀处理代码
+		if packagePrefix == "" {
+			// 如果用户删除了包前缀，则从代码中也删除前缀
+			goCode = strings.ReplaceAll(goCode, prefixForConversion+".", "")
+		} else if packagePrefix != prefixForConversion {
+			// 如果用户指定了非默认的包前缀，则替换默认前缀
+			goCode = strings.ReplaceAll(goCode, prefixForConversion+".", packagePrefix+".")
 		}
 
 		resp.Code = goCode
@@ -254,4 +285,26 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 	// 返回转换后的代码
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func main() {
+	// 设置HTTP路由
+	http.HandleFunc("/convert", handleConvert)
+
+	// 设置静态文件服务
+	fs := http.FileServer(http.Dir("./static"))
+	http.Handle("/", fs)
+
+	// 确定端口
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // 默认端口
+	}
+
+	// 启动服务器
+	fmt.Printf("服务器启动在端口 http://localhost:%s\n", port)
+	err := http.ListenAndServe(":"+port, nil)
+	if err != nil {
+		fmt.Printf("服务器启动失败: %v\n", err)
+	}
 }
