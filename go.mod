@@ -7,6 +7,8 @@ require (
 	github.com/zhangshanwen/html2go v0.0.0-20250319105037-813e15ef2d3d
 )
 
+replace github.com/zhangshanwen/html2go => ../html2go
+
 require (
 	github.com/iancoleman/strcase v0.3.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
